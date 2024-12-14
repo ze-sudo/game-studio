@@ -1,0 +1,333 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>スムーズテトリス</title>
+    <style>
+        body {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            margin: 0;
+            background-color: #f0f0f0;
+            font-family: 'Arial', sans-serif;
+        }
+        #gameContainer {
+            position: relative;
+            width: 300px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+        #gameCanvas {
+            border: 4px solid #333;
+            border-radius: 10px;
+            box-shadow: 0 0 20px rgba(0, 0, 0, 0.2);
+        }
+        #topButtons {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            display: flex;
+            gap: 5px;
+        }
+        #controls {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 5px;
+            margin-top: 10px;
+            width: 150px;
+        }
+        .control-btn {
+            background-color: #333;
+            border: none;
+            color: white;
+            padding: 10px;
+            text-align: center;
+            text-decoration: none;
+            display: inline-block;
+            font-size: 16px;
+            cursor: pointer;
+            border-radius: 5px;
+            user-select: none;
+            touch-action: manipulation;
+        }
+        #rotateBtn { grid-column: 2; }
+        #leftBtn { grid-column: 1; grid-row: 2; }
+        #downBtn { grid-column: 2; grid-row: 2; }
+        #rightBtn { grid-column: 3; grid-row: 2; }
+        #gameOver {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background-color: rgba(0, 0, 0, 0.75);
+            color: white;
+            padding: 20px;
+            border-radius: 10px;
+            text-align: center;
+            display: none;
+        }
+        #startButton {
+            background-color: #333;
+            border: none;
+            color: white;
+            padding: 10px 20px;
+            text-align: center;
+            text-decoration: none;
+            display: inline-block;
+            font-size: 16px;
+            margin: 4px 2px;
+            cursor: pointer;
+            border-radius: 5px;
+        }
+    </style>
+</head>
+<body>
+    <div id="gameContainer">
+        <canvas id="gameCanvas" width="300" height="510"></canvas>
+        <div id="topButtons">
+            <button id="pauseBtn" class="control-btn">⏸</button>
+            <button id="resetBtn" class="control-btn">⟳</button>
+        </div>
+        <div id="controls">
+            <button id="rotateBtn" class="control-btn">↻</button>
+            <button id="leftBtn" class="control-btn">←</button>
+            <button id="downBtn" class="control-btn">↓</button>
+            <button id="rightBtn" class="control-btn">→</button>
+        </div>
+        <div id="gameOver">
+            <h2>ゲームオーバー</h2>
+            <p id="finalScore"></p>
+            <button id="startButton">もう一度プレイ</button>
+        </div>
+    </div>
+    <script>
+    const canvas = document.getElementById('gameCanvas');
+    const ctx = canvas.getContext('2d');
+    const gameOverDiv = document.getElementById('gameOver');
+    const finalScoreP = document.getElementById('finalScore');
+    const startButton = document.getElementById('startButton');
+
+    const ROWS = 17;
+    const COLS = 10;
+    const BLOCK_SIZE = 30;
+    const COLORS = ['#FF6B6B', '#4ECDC4', '#45B7D1', '#FFA07A', '#98D8C8', '#F7DC6F', '#BB8FCE'];
+
+    let board = Array(ROWS).fill().map(() => Array(COLS).fill(0));
+    let currentPiece = null;
+    let score = 0;
+    let animationId = null;
+    let lastTime = 0;
+    let dropCounter = 0;
+    let dropInterval = 1000;
+    let isPaused = false;
+
+    const SHAPES = [
+        [[1, 1, 1, 1]],
+        [[1, 1], [1, 1]],
+        [[1, 1, 1], [0, 1, 0]],
+        [[1, 1, 1], [1, 0, 0]],
+        [[1, 1, 1], [0, 0, 1]],
+        [[1, 1, 0], [0, 1, 1]],
+        [[0, 1, 1], [1, 1, 0]]
+    ];
+
+    function createPiece() {
+        const shape = SHAPES[Math.floor(Math.random() * SHAPES.length)];
+        const color = COLORS[Math.floor(Math.random() * COLORS.length)];
+        const x = Math.floor(COLS / 2) - Math.floor(shape[0].length / 2);
+        const y = 0;
+        return { shape, color, x, y };
+    }
+
+    function drawBlock(x, y, color) {
+        ctx.fillStyle = color;
+        ctx.fillRect(x * BLOCK_SIZE, y * BLOCK_SIZE, BLOCK_SIZE, BLOCK_SIZE);
+        ctx.strokeStyle = '#333';
+        ctx.strokeRect(x * BLOCK_SIZE, y * BLOCK_SIZE, BLOCK_SIZE, BLOCK_SIZE);
+    }
+
+    function drawBoard() {
+        for (let y = 0; y < ROWS; y++) {
+            for (let x = 0; x < COLS; x++) {
+                if (board[y][x]) {
+                    drawBlock(x, y, board[y][x]);
+                }
+            }
+        }
+    }
+
+    function drawPiece() {
+        currentPiece.shape.forEach((row, dy) => {
+            row.forEach((value, dx) => {
+                if (value) {
+                    drawBlock(currentPiece.x + dx, currentPiece.y + dy, currentPiece.color);
+                }
+            });
+        });
+    }
+
+    function canMove(piece, dx, dy) {
+        return piece.shape.every((row, y) =>
+            row.every((value, x) =>
+                value === 0 ||
+                (piece.x + x + dx >= 0 &&
+                 piece.x + x + dx < COLS &&
+                 piece.y + y + dy < ROWS &&
+                 (piece.y + y + dy < 0 || board[piece.y + y + dy][piece.x + x + dx] === 0))
+            )
+        );
+    }
+
+    function merge() {
+        currentPiece.shape.forEach((row, dy) => {
+            row.forEach((value, dx) => {
+                if (value) {
+                    board[currentPiece.y + dy][currentPiece.x + dx] = currentPiece.color;
+                }
+            });
+        });
+    }
+
+    function rotate() {
+        const rotated = currentPiece.shape[0].map((_, i) =>
+            currentPiece.shape.map(row => row[i]).reverse()
+        );
+        if (canMove({ ...currentPiece, shape: rotated }, 0, 0)) {
+            currentPiece.shape = rotated;
+        }
+    }
+
+    function clearLines() {
+        let linesCleared = 0;
+        for (let y = ROWS - 1; y >= 0; y--) {
+            if (board[y].every(cell => cell !== 0)) {
+                board.splice(y, 1);
+                board.unshift(Array(COLS).fill(0));
+                linesCleared++;
+                y++;
+            }
+        }
+        if (linesCleared > 0) {
+            score += linesCleared * 100;
+            drawScore();
+        }
+    }
+
+    function drawScore() {
+        ctx.fillStyle = '#333';
+        ctx.font = 'bold 20px Arial';
+        ctx.fillText(`スコア: ${score}`, 10, 30);
+    }
+
+    function gameOver() {
+        cancelAnimationFrame(animationId);
+        gameOverDiv.style.display = 'block';
+        finalScoreP.textContent = `最終スコア: ${score}`;
+    }
+
+    function update(time = 0) {
+        const deltaTime = time - lastTime;
+        lastTime = time;
+
+        if (!isPaused) {
+            dropCounter += deltaTime;
+            if (dropCounter > dropInterval) {
+                moveDown();
+            }
+
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            ctx.fillStyle = '#f0f0f0';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            drawBoard();
+            drawPiece();
+            drawScore();
+        }
+
+        animationId = requestAnimationFrame(update);
+    }
+
+    function moveDown() {
+        if (canMove(currentPiece, 0, 1)) {
+            currentPiece.y++;
+        } else {
+            merge();
+            clearLines();
+            currentPiece = createPiece();
+            if (!canMove(currentPiece, 0, 0)) {
+                gameOver();
+                return;
+            }
+        }
+        dropCounter = 0;
+    }
+
+    function startGame() {
+        board = Array(ROWS).fill().map(() => Array(COLS).fill(0));
+        score = 0;
+        currentPiece = createPiece();
+        gameOverDiv.style.display = 'none';
+        isPaused = false;
+        if (animationId) cancelAnimationFrame(animationId);
+        update();
+    }
+
+    function pauseGame() {
+        isPaused = !isPaused;
+        document.getElementById('pauseBtn').textContent = isPaused ? '▶' : '⏸';
+    }
+
+    function resetGame() {
+        startGame();
+    }
+
+    document.addEventListener('keydown', event => {
+        if (!isPaused) {
+            switch (event.keyCode) {
+                case 37: // Left arrow
+                    if (canMove(currentPiece, -1, 0)) currentPiece.x--;
+                    break;
+                case 39: // Right arrow
+                    if (canMove(currentPiece, 1, 0)) currentPiece.x++;
+                    break;
+                case 40: // Down arrow
+                    moveDown();
+                    break;
+                case 38: // Up arrow
+                    rotate();
+                    break;
+            }
+        }
+    });
+
+    startButton.addEventListener('click', startGame);
+    document.getElementById('leftBtn').addEventListener('click', () => {
+        if (!isPaused && canMove(currentPiece, -1, 0)) currentPiece.x--;
+    });
+    document.getElementById('rightBtn').addEventListener('click', () => {
+        if (!isPaused && canMove(currentPiece, 1, 0)) currentPiece.x++;
+    });
+    document.getElementById('rotateBtn').addEventListener('click', () => {
+        if (!isPaused) rotate();
+    });
+    document.getElementById('downBtn').addEventListener('click', () => {
+        if (!isPaused) moveDown();
+    });
+    document.getElementById('pauseBtn').addEventListener('click', pauseGame);
+    document.getElementById('resetBtn').addEventListener('click', resetGame);
+
+    // タッチイベントの伝播を防止
+    document.querySelectorAll('.control-btn').forEach(btn => {
+        btn.addEventListener('touchstart', (e) => {
+            e.preventDefault();
+        }, { passive: false });
+    });
+
+    startGame();
+    </script>
+</body>
+</html>
+
